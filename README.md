@@ -1,7 +1,7 @@
 # MECI for Flex-π: spoken mid-execution corrections for a world-action model
 
 Plugin code for *Add Mid-Execution Corrections Interface to World Action Models, as Fine-Tuning Data*
-(Jessica Wu, University of Florida). Planned public home: https://github.com/jessicawu-333/meci-flexpi (not created yet).
+(Jessica Wu, University of Florida). Repository: https://github.com/jessicawu-333/meci-flexpi (Apache 2.0).
 
 **Status:** design + patch + CPU unit tests only. Nothing has been trained or evaluated on a robot, in
 simulation, or at full model size, and no task results are claimed.
