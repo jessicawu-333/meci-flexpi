@@ -1,0 +1,192 @@
+saved 14 reference tensors to /tmp/flexpi_meci_ref.pt
+...........................
+FULL-SIZE MECI ADAPTER PARAMETERS: 19,662,413
+  of which path (d) (video/DINO/pointmap modulation): 1,263,681
+.
+==================================== PASSES ====================================
+___________________________ test_identity_no_adapter ___________________________
+------------------------------ Captured log call -------------------------------
+INFO     flexpi.models.mot:mot.py:101 Initialized MoT with experts: ['video', 'action'], num_layers=4, attn_mode=sdpa
+INFO     flexpi.models.mot:mot.py:107   Expert 'video': num_params=0.00 B
+INFO     flexpi.models.mot:mot.py:107   Expert 'action': num_params=0.00 B
+INFO     flexpi.models.mot:mot.py:112 HBridge enabled: bottom=1, middle=2, top=1 layers (ratios: bottom=0.25, top=0.25)
+INFO     flexpi.models.flexpi:flexpi.py:217 FlexPi: dino_pred_x0=True — DINO head output is x̂0; v̂ = (x_t − x̂0)/σ is derived analytically for loss and inference.
+INFO     flexpi.models.flexpi:flexpi.py:316 FlexPi: dino_temporal_stride=1 dino_stride_keep_far=False
+INFO     flexpi.models.flexpi:flexpi.py:3130 FlexPi inference regime: present=(video=True, dino=True, pointmap=True) | denoise=(action=True, video=False, dino=False, pointmap=False) | cross_modal_imagine=(video=False, dino=False, pointmap=False)
+INFO     flexpi.models.flexpi:flexpi.py:3130 FlexPi inference regime: present=(video=True, dino=True, pointmap=True) | denoise=(action=True, video=True, dino=True, pointmap=True) | cross_modal_imagine=(video=False, dino=False, pointmap=False)
+_____________________ test_identity_adapter_no_correction ______________________
+------------------------------ Captured log call -------------------------------
+INFO     flexpi.models.mot:mot.py:101 Initialized MoT with experts: ['video', 'action'], num_layers=4, attn_mode=sdpa
+INFO     flexpi.models.mot:mot.py:107   Expert 'video': num_params=0.00 B
+INFO     flexpi.models.mot:mot.py:107   Expert 'action': num_params=0.00 B
+INFO     flexpi.models.mot:mot.py:112 HBridge enabled: bottom=1, middle=2, top=1 layers (ratios: bottom=0.25, top=0.25)
+INFO     flexpi.models.flexpi:flexpi.py:217 FlexPi: dino_pred_x0=True — DINO head output is x̂0; v̂ = (x_t − x̂0)/σ is derived analytically for loss and inference.
+INFO     flexpi.models.flexpi:flexpi.py:316 FlexPi: dino_temporal_stride=1 dino_stride_keep_far=False
+INFO     flexpi.models.flexpi:flexpi.py:3130 FlexPi inference regime: present=(video=True, dino=True, pointmap=True) | denoise=(action=True, video=False, dino=False, pointmap=False) | cross_modal_imagine=(video=False, dino=False, pointmap=False)
+INFO     flexpi.models.flexpi:flexpi.py:3130 FlexPi inference regime: present=(video=True, dino=True, pointmap=True) | denoise=(action=True, video=True, dino=True, pointmap=True) | cross_modal_imagine=(video=False, dino=False, pointmap=False)
+_______________ test_identity_adapter_trained_but_no_correction ________________
+------------------------------ Captured log call -------------------------------
+INFO     flexpi.models.mot:mot.py:101 Initialized MoT with experts: ['video', 'action'], num_layers=4, attn_mode=sdpa
+INFO     flexpi.models.mot:mot.py:107   Expert 'video': num_params=0.00 B
+INFO     flexpi.models.mot:mot.py:107   Expert 'action': num_params=0.00 B
+INFO     flexpi.models.mot:mot.py:112 HBridge enabled: bottom=1, middle=2, top=1 layers (ratios: bottom=0.25, top=0.25)
+INFO     flexpi.models.flexpi:flexpi.py:217 FlexPi: dino_pred_x0=True — DINO head output is x̂0; v̂ = (x_t − x̂0)/σ is derived analytically for loss and inference.
+INFO     flexpi.models.flexpi:flexpi.py:316 FlexPi: dino_temporal_stride=1 dino_stride_keep_far=False
+INFO     flexpi.models.flexpi:flexpi.py:3130 FlexPi inference regime: present=(video=True, dino=True, pointmap=True) | denoise=(action=True, video=False, dino=False, pointmap=False) | cross_modal_imagine=(video=False, dino=False, pointmap=False)
+INFO     flexpi.models.flexpi:flexpi.py:3130 FlexPi inference regime: present=(video=True, dino=True, pointmap=True) | denoise=(action=True, video=True, dino=True, pointmap=True) | cross_modal_imagine=(video=False, dino=False, pointmap=False)
+__________________ test_identity_active_correction_zero_gates __________________
+------------------------------ Captured log call -------------------------------
+INFO     flexpi.models.mot:mot.py:101 Initialized MoT with experts: ['video', 'action'], num_layers=4, attn_mode=sdpa
+INFO     flexpi.models.mot:mot.py:107   Expert 'video': num_params=0.00 B
+INFO     flexpi.models.mot:mot.py:107   Expert 'action': num_params=0.00 B
+INFO     flexpi.models.mot:mot.py:112 HBridge enabled: bottom=1, middle=2, top=1 layers (ratios: bottom=0.25, top=0.25)
+INFO     flexpi.models.flexpi:flexpi.py:217 FlexPi: dino_pred_x0=True — DINO head output is x̂0; v̂ = (x_t − x̂0)/σ is derived analytically for loss and inference.
+INFO     flexpi.models.flexpi:flexpi.py:316 FlexPi: dino_temporal_stride=1 dino_stride_keep_far=False
+INFO     flexpi.models.flexpi:flexpi.py:3130 FlexPi inference regime: present=(video=True, dino=True, pointmap=True) | denoise=(action=True, video=False, dino=False, pointmap=False) | cross_modal_imagine=(video=False, dino=False, pointmap=False)
+INFO     flexpi.models.flexpi:flexpi.py:3130 FlexPi inference regime: present=(video=True, dino=True, pointmap=True) | denoise=(action=True, video=True, dino=True, pointmap=True) | cross_modal_imagine=(video=False, dino=False, pointmap=False)
+_______________ test_identity_inactive_correction_trained_gates ________________
+------------------------------ Captured log call -------------------------------
+INFO     flexpi.models.mot:mot.py:101 Initialized MoT with experts: ['video', 'action'], num_layers=4, attn_mode=sdpa
+INFO     flexpi.models.mot:mot.py:107   Expert 'video': num_params=0.00 B
+INFO     flexpi.models.mot:mot.py:107   Expert 'action': num_params=0.00 B
+INFO     flexpi.models.mot:mot.py:112 HBridge enabled: bottom=1, middle=2, top=1 layers (ratios: bottom=0.25, top=0.25)
+INFO     flexpi.models.flexpi:flexpi.py:217 FlexPi: dino_pred_x0=True — DINO head output is x̂0; v̂ = (x_t − x̂0)/σ is derived analytically for loss and inference.
+INFO     flexpi.models.flexpi:flexpi.py:316 FlexPi: dino_temporal_stride=1 dino_stride_keep_far=False
+INFO     flexpi.models.flexpi:flexpi.py:3130 FlexPi inference regime: present=(video=True, dino=True, pointmap=True) | denoise=(action=True, video=False, dino=False, pointmap=False) | cross_modal_imagine=(video=False, dino=False, pointmap=False)
+INFO     flexpi.models.flexpi:flexpi.py:3130 FlexPi inference regime: present=(video=True, dino=True, pointmap=True) | denoise=(action=True, video=True, dino=True, pointmap=True) | cross_modal_imagine=(video=False, dino=False, pointmap=False)
+_________________ test_mixed_batch_only_active_sample_changes __________________
+------------------------------ Captured log call -------------------------------
+INFO     flexpi.models.mot:mot.py:101 Initialized MoT with experts: ['video', 'action'], num_layers=4, attn_mode=sdpa
+INFO     flexpi.models.mot:mot.py:107   Expert 'video': num_params=0.00 B
+INFO     flexpi.models.mot:mot.py:107   Expert 'action': num_params=0.00 B
+INFO     flexpi.models.mot:mot.py:112 HBridge enabled: bottom=1, middle=2, top=1 layers (ratios: bottom=0.25, top=0.25)
+INFO     flexpi.models.flexpi:flexpi.py:217 FlexPi: dino_pred_x0=True — DINO head output is x̂0; v̂ = (x_t − x̂0)/σ is derived analytically for loss and inference.
+INFO     flexpi.models.flexpi:flexpi.py:316 FlexPi: dino_temporal_stride=1 dino_stride_keep_far=False
+_________ test_action_paths_change_action_not_imagined_future[gate_in] _________
+------------------------------ Captured log call -------------------------------
+INFO     flexpi.models.mot:mot.py:101 Initialized MoT with experts: ['video', 'action'], num_layers=4, attn_mode=sdpa
+INFO     flexpi.models.mot:mot.py:107   Expert 'video': num_params=0.00 B
+INFO     flexpi.models.mot:mot.py:107   Expert 'action': num_params=0.00 B
+INFO     flexpi.models.mot:mot.py:112 HBridge enabled: bottom=1, middle=2, top=1 layers (ratios: bottom=0.25, top=0.25)
+INFO     flexpi.models.flexpi:flexpi.py:217 FlexPi: dino_pred_x0=True — DINO head output is x̂0; v̂ = (x_t − x̂0)/σ is derived analytically for loss and inference.
+INFO     flexpi.models.flexpi:flexpi.py:316 FlexPi: dino_temporal_stride=1 dino_stride_keep_far=False
+INFO     flexpi.models.flexpi:flexpi.py:3130 FlexPi inference regime: present=(video=True, dino=True, pointmap=True) | denoise=(action=True, video=False, dino=False, pointmap=False) | cross_modal_imagine=(video=False, dino=False, pointmap=False)
+INFO     flexpi.models.flexpi:flexpi.py:3130 FlexPi inference regime: present=(video=True, dino=True, pointmap=True) | denoise=(action=True, video=True, dino=True, pointmap=True) | cross_modal_imagine=(video=False, dino=False, pointmap=False)
+________ test_action_paths_change_action_not_imagined_future[gate_ada] _________
+------------------------------ Captured log call -------------------------------
+INFO     flexpi.models.mot:mot.py:101 Initialized MoT with experts: ['video', 'action'], num_layers=4, attn_mode=sdpa
+INFO     flexpi.models.mot:mot.py:107   Expert 'video': num_params=0.00 B
+INFO     flexpi.models.mot:mot.py:107   Expert 'action': num_params=0.00 B
+INFO     flexpi.models.mot:mot.py:112 HBridge enabled: bottom=1, middle=2, top=1 layers (ratios: bottom=0.25, top=0.25)
+INFO     flexpi.models.flexpi:flexpi.py:217 FlexPi: dino_pred_x0=True — DINO head output is x̂0; v̂ = (x_t − x̂0)/σ is derived analytically for loss and inference.
+INFO     flexpi.models.flexpi:flexpi.py:316 FlexPi: dino_temporal_stride=1 dino_stride_keep_far=False
+INFO     flexpi.models.flexpi:flexpi.py:3130 FlexPi inference regime: present=(video=True, dino=True, pointmap=True) | denoise=(action=True, video=False, dino=False, pointmap=False) | cross_modal_imagine=(video=False, dino=False, pointmap=False)
+INFO     flexpi.models.flexpi:flexpi.py:3130 FlexPi inference regime: present=(video=True, dino=True, pointmap=True) | denoise=(action=True, video=True, dino=True, pointmap=True) | cross_modal_imagine=(video=False, dino=False, pointmap=False)
+________ test_action_paths_change_action_not_imagined_future[gate_head] ________
+------------------------------ Captured log call -------------------------------
+INFO     flexpi.models.mot:mot.py:101 Initialized MoT with experts: ['video', 'action'], num_layers=4, attn_mode=sdpa
+INFO     flexpi.models.mot:mot.py:107   Expert 'video': num_params=0.00 B
+INFO     flexpi.models.mot:mot.py:107   Expert 'action': num_params=0.00 B
+INFO     flexpi.models.mot:mot.py:112 HBridge enabled: bottom=1, middle=2, top=1 layers (ratios: bottom=0.25, top=0.25)
+INFO     flexpi.models.flexpi:flexpi.py:217 FlexPi: dino_pred_x0=True — DINO head output is x̂0; v̂ = (x_t − x̂0)/σ is derived analytically for loss and inference.
+INFO     flexpi.models.flexpi:flexpi.py:316 FlexPi: dino_temporal_stride=1 dino_stride_keep_far=False
+INFO     flexpi.models.flexpi:flexpi.py:3130 FlexPi inference regime: present=(video=True, dino=True, pointmap=True) | denoise=(action=True, video=False, dino=False, pointmap=False) | cross_modal_imagine=(video=False, dino=False, pointmap=False)
+INFO     flexpi.models.flexpi:flexpi.py:3130 FlexPi inference regime: present=(video=True, dino=True, pointmap=True) | denoise=(action=True, video=True, dino=True, pointmap=True) | cross_modal_imagine=(video=False, dino=False, pointmap=False)
+___________ test_video_path_changes_imagined_future_and_joint_action ___________
+------------------------------ Captured log call -------------------------------
+INFO     flexpi.models.mot:mot.py:101 Initialized MoT with experts: ['video', 'action'], num_layers=4, attn_mode=sdpa
+INFO     flexpi.models.mot:mot.py:107   Expert 'video': num_params=0.00 B
+INFO     flexpi.models.mot:mot.py:107   Expert 'action': num_params=0.00 B
+INFO     flexpi.models.mot:mot.py:112 HBridge enabled: bottom=1, middle=2, top=1 layers (ratios: bottom=0.25, top=0.25)
+INFO     flexpi.models.flexpi:flexpi.py:217 FlexPi: dino_pred_x0=True — DINO head output is x̂0; v̂ = (x_t − x̂0)/σ is derived analytically for loss and inference.
+INFO     flexpi.models.flexpi:flexpi.py:316 FlexPi: dino_temporal_stride=1 dino_stride_keep_far=False
+INFO     flexpi.models.flexpi:flexpi.py:3130 FlexPi inference regime: present=(video=True, dino=True, pointmap=True) | denoise=(action=True, video=True, dino=True, pointmap=True) | cross_modal_imagine=(video=False, dino=False, pointmap=False)
+_________________ test_video_path_is_noop_in_action_only_mode __________________
+------------------------------ Captured log call -------------------------------
+INFO     flexpi.models.mot:mot.py:101 Initialized MoT with experts: ['video', 'action'], num_layers=4, attn_mode=sdpa
+INFO     flexpi.models.mot:mot.py:107   Expert 'video': num_params=0.00 B
+INFO     flexpi.models.mot:mot.py:107   Expert 'action': num_params=0.00 B
+INFO     flexpi.models.mot:mot.py:112 HBridge enabled: bottom=1, middle=2, top=1 layers (ratios: bottom=0.25, top=0.25)
+INFO     flexpi.models.flexpi:flexpi.py:217 FlexPi: dino_pred_x0=True — DINO head output is x̂0; v̂ = (x_t − x̂0)/σ is derived analytically for loss and inference.
+INFO     flexpi.models.flexpi:flexpi.py:316 FlexPi: dino_temporal_stride=1 dino_stride_keep_far=False
+INFO     flexpi.models.flexpi:flexpi.py:3130 FlexPi inference regime: present=(video=True, dino=True, pointmap=True) | denoise=(action=True, video=False, dino=False, pointmap=False) | cross_modal_imagine=(video=False, dino=False, pointmap=False)
+____________ test_compiled_step_body_matches_eager_with_correction _____________
+------------------------------ Captured log call -------------------------------
+INFO     flexpi.models.mot:mot.py:101 Initialized MoT with experts: ['video', 'action'], num_layers=4, attn_mode=sdpa
+INFO     flexpi.models.mot:mot.py:107   Expert 'video': num_params=0.00 B
+INFO     flexpi.models.mot:mot.py:107   Expert 'action': num_params=0.00 B
+INFO     flexpi.models.mot:mot.py:112 HBridge enabled: bottom=1, middle=2, top=1 layers (ratios: bottom=0.25, top=0.25)
+INFO     flexpi.models.flexpi:flexpi.py:217 FlexPi: dino_pred_x0=True — DINO head output is x̂0; v̂ = (x_t − x̂0)/σ is derived analytically for loss and inference.
+INFO     flexpi.models.flexpi:flexpi.py:316 FlexPi: dino_temporal_stride=1 dino_stride_keep_far=False
+INFO     flexpi.models.flexpi:flexpi.py:3130 FlexPi inference regime: present=(video=True, dino=True, pointmap=True) | denoise=(action=True, video=False, dino=False, pointmap=False) | cross_modal_imagine=(video=False, dino=False, pointmap=False)
+_________________ test_training_gradients_reach_gates_and_head _________________
+------------------------------ Captured log call -------------------------------
+INFO     flexpi.models.mot:mot.py:101 Initialized MoT with experts: ['video', 'action'], num_layers=4, attn_mode=sdpa
+INFO     flexpi.models.mot:mot.py:107   Expert 'video': num_params=0.00 B
+INFO     flexpi.models.mot:mot.py:107   Expert 'action': num_params=0.00 B
+INFO     flexpi.models.mot:mot.py:112 HBridge enabled: bottom=1, middle=2, top=1 layers (ratios: bottom=0.25, top=0.25)
+INFO     flexpi.models.flexpi:flexpi.py:217 FlexPi: dino_pred_x0=True — DINO head output is x̂0; v̂ = (x_t − x̂0)/σ is derived analytically for loss and inference.
+INFO     flexpi.models.flexpi:flexpi.py:316 FlexPi: dino_temporal_stride=1 dino_stride_keep_far=False
+_______________________ test_aux_loss_zero_for_inactive ________________________
+------------------------------ Captured log call -------------------------------
+INFO     flexpi.models.mot:mot.py:101 Initialized MoT with experts: ['video', 'action'], num_layers=4, attn_mode=sdpa
+INFO     flexpi.models.mot:mot.py:107   Expert 'video': num_params=0.00 B
+INFO     flexpi.models.mot:mot.py:107   Expert 'action': num_params=0.00 B
+INFO     flexpi.models.mot:mot.py:112 HBridge enabled: bottom=1, middle=2, top=1 layers (ratios: bottom=0.25, top=0.25)
+INFO     flexpi.models.flexpi:flexpi.py:217 FlexPi: dino_pred_x0=True — DINO head output is x̂0; v̂ = (x_t − x̂0)/σ is derived analytically for loss and inference.
+INFO     flexpi.models.flexpi:flexpi.py:316 FlexPi: dino_temporal_stride=1 dino_stride_keep_far=False
+_____________ test_awr_weight_one_is_stock_and_scales_action_loss ______________
+------------------------------ Captured log call -------------------------------
+INFO     flexpi.models.mot:mot.py:101 Initialized MoT with experts: ['video', 'action'], num_layers=4, attn_mode=sdpa
+INFO     flexpi.models.mot:mot.py:107   Expert 'video': num_params=0.00 B
+INFO     flexpi.models.mot:mot.py:107   Expert 'action': num_params=0.00 B
+INFO     flexpi.models.mot:mot.py:112 HBridge enabled: bottom=1, middle=2, top=1 layers (ratios: bottom=0.25, top=0.25)
+INFO     flexpi.models.flexpi:flexpi.py:217 FlexPi: dino_pred_x0=True — DINO head output is x̂0; v̂ = (x_t − x̂0)/σ is derived analytically for loss and inference.
+INFO     flexpi.models.flexpi:flexpi.py:316 FlexPi: dino_temporal_stride=1 dino_stride_keep_far=False
+_________________ test_explicit_residual_added_after_sampling __________________
+------------------------------ Captured log call -------------------------------
+INFO     flexpi.models.mot:mot.py:101 Initialized MoT with experts: ['video', 'action'], num_layers=4, attn_mode=sdpa
+INFO     flexpi.models.mot:mot.py:107   Expert 'video': num_params=0.00 B
+INFO     flexpi.models.mot:mot.py:107   Expert 'action': num_params=0.00 B
+INFO     flexpi.models.mot:mot.py:112 HBridge enabled: bottom=1, middle=2, top=1 layers (ratios: bottom=0.25, top=0.25)
+INFO     flexpi.models.flexpi:flexpi.py:217 FlexPi: dino_pred_x0=True — DINO head output is x̂0; v̂ = (x_t − x̂0)/σ is derived analytically for loss and inference.
+INFO     flexpi.models.flexpi:flexpi.py:316 FlexPi: dino_temporal_stride=1 dino_stride_keep_far=False
+INFO     flexpi.models.flexpi:flexpi.py:3130 FlexPi inference regime: present=(video=True, dino=True, pointmap=True) | denoise=(action=True, video=False, dino=False, pointmap=False) | cross_modal_imagine=(video=False, dino=False, pointmap=False)
+________________________ test_effector_embedding_routes ________________________
+------------------------------ Captured log call -------------------------------
+INFO     flexpi.models.mot:mot.py:101 Initialized MoT with experts: ['video', 'action'], num_layers=4, attn_mode=sdpa
+INFO     flexpi.models.mot:mot.py:107   Expert 'video': num_params=0.00 B
+INFO     flexpi.models.mot:mot.py:107   Expert 'action': num_params=0.00 B
+INFO     flexpi.models.mot:mot.py:112 HBridge enabled: bottom=1, middle=2, top=1 layers (ratios: bottom=0.25, top=0.25)
+INFO     flexpi.models.flexpi:flexpi.py:217 FlexPi: dino_pred_x0=True — DINO head output is x̂0; v̂ = (x_t − x̂0)/σ is derived analytically for loss and inference.
+INFO     flexpi.models.flexpi:flexpi.py:316 FlexPi: dino_temporal_stride=1 dino_stride_keep_far=False
+=========================== short test summary info ============================
+PASSED test_meci_flexpi.py::test_identity_no_adapter
+PASSED test_meci_flexpi.py::test_identity_adapter_no_correction
+PASSED test_meci_flexpi.py::test_identity_adapter_trained_but_no_correction
+PASSED test_meci_flexpi.py::test_identity_active_correction_zero_gates
+PASSED test_meci_flexpi.py::test_identity_inactive_correction_trained_gates
+PASSED test_meci_flexpi.py::test_mixed_batch_only_active_sample_changes
+PASSED test_meci_flexpi.py::test_action_paths_change_action_not_imagined_future[gate_in]
+PASSED test_meci_flexpi.py::test_action_paths_change_action_not_imagined_future[gate_ada]
+PASSED test_meci_flexpi.py::test_action_paths_change_action_not_imagined_future[gate_head]
+PASSED test_meci_flexpi.py::test_video_path_changes_imagined_future_and_joint_action
+PASSED test_meci_flexpi.py::test_video_path_is_noop_in_action_only_mode
+PASSED test_meci_flexpi.py::test_future_token_mask_matches_anchor_layout
+PASSED test_meci_flexpi.py::test_compiled_step_body_matches_eager_with_correction
+PASSED test_meci_flexpi.py::test_training_gradients_reach_gates_and_head
+PASSED test_meci_flexpi.py::test_aux_loss_zero_for_inactive
+PASSED test_meci_flexpi.py::test_awr_weight_one_is_stock_and_scales_action_loss
+PASSED test_meci_flexpi.py::test_explicit_residual_added_after_sampling
+PASSED test_meci_flexpi.py::test_effector_embedding_routes
+PASSED test_meci_flexpi.py::test_parse[left hand more left half an inch-left-1-0.0127]
+PASSED test_meci_flexpi.py::test_parse[right gripper up 1 cm-right-2-0.01]
+PASSED test_meci_flexpi.py::test_parse[move forward 1 inch-default-0-0.0254]
+PASSED test_meci_flexpi.py::test_parse[rotate gripper 10 degrees-default-5-0.17453292519943295]
+PASSED test_meci_flexpi.py::test_routing_yam_robotwin_libero
+PASSED test_meci_flexpi.py::test_libero_residual_sums_to_delta_through_flexpi_normalizer
+PASSED test_meci_flexpi.py::test_yam_body_frame_residual_through_flexpi_inverse_transform
+PASSED test_meci_flexpi.py::test_robotwin_absolute_ramp_reaches_delta_and_releases
+PASSED test_meci_flexpi.py::test_rl_helpers
+PASSED test_meci_flexpi.py::test_full_size_adapter_parameter_count
+28 passed in 2.88s

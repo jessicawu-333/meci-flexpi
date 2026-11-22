@@ -1,0 +1,960 @@
+diff -ruN a/src/flexpi/models/action_dit.py b/src/flexpi/models/action_dit.py
+--- a/src/flexpi/models/action_dit.py	2026-11-22 11:46:05.089944441 -0800
++++ b/src/flexpi/models/action_dit.py	2026-11-22 11:46:05.093946018 -0800
+@@ -97,6 +97,10 @@
+         )
+         self.head = nn.Linear(hidden_dim, action_dim)
+         self.freqs = precompute_freqs_cis(attn_head_dim, end=1024)
++        # MECI: optional correction adapter (flexpi.models.meci_correction) and the per-call
++        # correction context. Both None => the forward pass is the stock one.
++        self.meci = None
++        self._meci_ctx = None
+ 
+         self.use_gradient_checkpointing = use_gradient_checkpointing
+ 
+@@ -280,10 +284,12 @@
+             )
+ 
+         t = self.time_embedding(sinusoidal_embedding_1d(self.freq_dim, timestep))
++        t = self.meci_condition_time(t)  # MECI path (b): adaLN conditioning
+ 
+         t_mod = self.time_projection(t).unflatten(1, (6, self.hidden_dim))
+ 
+         tokens = self.action_encoder(action_tokens)
++        tokens = self.meci_condition_input(tokens)  # MECI path (a): action-expert input
+         context_emb = self.text_embedding(context)
+         context_attn_mask = context_mask.unsqueeze(1).expand(-1, seq_len, -1)
+         freqs = self.freqs[:seq_len].view(seq_len, 1, -1).to(tokens.device)
+@@ -302,7 +308,26 @@
+         }
+ 
+     def post_dit(self, tokens: torch.Tensor, pre_state: Dict[str, Any]) -> torch.Tensor:
+-        return self.head(tokens)
++        return self.head(self.meci_pre_head(tokens))  # MECI path (c): pre-output residual
++
++    # ---- MECI hooks: identity unless an adapter is attached AND a correction context is set ----
++    def attach_meci(self, meci) -> None:
++        self.meci = meci
++
++    def meci_condition_time(self, t: torch.Tensor) -> torch.Tensor:
++        if self.meci is None or self._meci_ctx is None:
++            return t
++        return self.meci.condition_action_time(self._meci_ctx, t)
++
++    def meci_condition_input(self, tokens: torch.Tensor) -> torch.Tensor:
++        if self.meci is None or self._meci_ctx is None:
++            return tokens
++        return self.meci.condition_action_input(self._meci_ctx, tokens)
++
++    def meci_pre_head(self, tokens: torch.Tensor) -> torch.Tensor:
++        if self.meci is None or self._meci_ctx is None:
++            return tokens
++        return self.meci.pre_head(self._meci_ctx, tokens)
+ 
+     def forward(
+         self,
+diff -ruN a/src/flexpi/models/backbone.py b/src/flexpi/models/backbone.py
+--- a/src/flexpi/models/backbone.py	2026-11-22 11:46:05.089944441 -0800
++++ b/src/flexpi/models/backbone.py	2026-11-22 11:46:05.093946018 -0800
+@@ -1227,8 +1227,10 @@
+         """
+         ae = self.action_expert
+         t = ae.time_embedding(sinusoidal_embedding_1d(ae.freq_dim, timestep_action))
++        t = ae.meci_condition_time(t)  # MECI path (b)
+         t_mod = ae.time_projection(t).unflatten(1, (6, ae.hidden_dim))
+         tokens = ae.action_encoder(latents_action)
++        tokens = ae.meci_condition_input(tokens)  # MECI path (a)
+         seq_len = tokens.shape[1]
+         context_emb = ae.text_embedding(context)
+         # None = all-visible context (attn_backend="auto" drops trivial masks).
+@@ -1250,7 +1252,7 @@
+             action_attention_mask=action_attention_mask,
+             action_only_attention_mask=action_only_attention_mask,
+         )
+-        return ae.head(tokens)
++        return ae.head(ae.meci_pre_head(tokens))  # MECI path (c)
+ 
+     @torch.no_grad()
+     def _predict_action_noise_with_cache(
+diff -ruN a/src/flexpi/models/flexpi.py b/src/flexpi/models/flexpi.py
+--- a/src/flexpi/models/flexpi.py	2026-11-22 11:46:05.089944441 -0800
++++ b/src/flexpi/models/flexpi.py	2026-11-22 11:46:05.093946018 -0800
+@@ -44,6 +44,7 @@
+ 
+ from .backbone import FlexPiBackbone
+ from .helpers.flex_joint import FlexJointConfig, sample_flex_batch_flags
++from . import meci_correction as _meci
+ from .inference_opt.step_skip import StepSkipController, resolve_sim_sources
+ 
+ 
+@@ -1107,6 +1108,35 @@
+ 
+         return merged_tokens, merged_freqs, merged_t_mod, merged_ctx_mask
+ 
++    # ------------------------------------------------------------------
++    # MECI (mid-execution corrections). Inactive unless enable_meci() was
++    # called AND a correction is supplied for the current call/batch.
++    # ------------------------------------------------------------------
++    def enable_meci(self, config=None):
++        """Attach a MECI adapter to the action expert (paths a-c) and use it for path (d)."""
++        cfg = config or _meci.MECIConfig(
++            width=int(self.action_expert.hidden_dim),
++            video_dim=int(self.video_expert.hidden_dim),
++        )
++        meci = _meci.MECICorrection(cfg).to(device=self.device)
++        self.action_expert.attach_meci(meci)
++        return meci
++
++    @property
++    def meci(self):
++        return getattr(self.action_expert, "meci", None)
++
++    def _meci_set_ctx(self, ctx) -> None:
++        self.action_expert._meci_ctx = ctx
++
++    def _meci_condition_future(self, merged_t_mod, Sv, tpf, Sd, dtpf, Sp, ptpf):
++        """MECI path (d): offset the modulation of the noisy future video/DINO/pointmap tokens."""
++        ctx = self.action_expert._meci_ctx
++        if self.meci is None or ctx is None:
++            return merged_t_mod
++        mask = _meci.future_token_mask(Sv, tpf, Sd, dtpf, Sp, ptpf, device=merged_t_mod.device)
++        return self.meci.condition_future_t_mod(ctx, merged_t_mod, mask)
++
+     def _build_stream_t_mod(
+         self, timestep_per_token: torch.Tensor, seq_len: int, B: int,
+     ) -> torch.Tensor:
+@@ -1226,6 +1256,9 @@
+     # ------------------------------------------------------------------
+ 
+     def _base_training_loss(self, sample, tiled: bool = False):
++        # MECI: correction context for this batch (None when the batch carries no correction).
++        meci_ctx = _meci.correction_from_sample(self.meci, sample)
++        self._meci_set_ctx(meci_ctx)
+         inputs = self.build_inputs(sample, tiled=tiled)
+         input_latents = inputs["input_latents"]
+         B = input_latents.shape[0]
+@@ -1358,6 +1391,7 @@
+                 pointmap_tokens, pt_t_mod, pt_freqs,
+             )
+         )
++        merged_t_mod = self._meci_condition_future(merged_t_mod, Sv, tpf, Sd, dtpf, Sp, ptpf)  # MECI (d)
+         effective_dtpf = dtpf
+         effective_ptpf = ptpf
+         Sp_for_mask = Sp
+@@ -1418,7 +1452,17 @@
+         else:
+             la = la.mean(1)
+         wa = self.train_action_scheduler.training_weight(t_action).to(la.device, dtype=la.dtype)
++        # MECI: optional per-sample AWR weights (meci_metric / meci_correction.awr_weights); 1 when absent.
++        w_awr = sample.get("meci_awr_weight")
++        if w_awr is not None:
++            wa = wa * w_awr.to(la.device, dtype=la.dtype)
+         loss_action = (la * wa).mean()
++        if meci_ctx is not None:
++            loss_meci_aux = self.meci.aux_loss(
++                meci_ctx, sample.get("meci_delta"), sample.get("meci_effector"),
++            ).mean()
++        else:
++            loss_meci_aux = None
+ 
+         # --- DINO loss ---
+         if target_dino is None:
+@@ -1505,12 +1549,17 @@
+             + self.loss_lambda_dino * loss_dino
+             + self.loss_lambda_pointmap * loss_pointmap
+         )
++        if loss_meci_aux is not None:
++            total = total + self.meci.config.aux_weight * loss_meci_aux
+         loss_dict = {
+             "loss_video": self.loss_lambda_video * float(loss_video.detach().item()),
+             "loss_action": self.loss_lambda_action * float(loss_action.detach().item()),
+             "loss_dino": self.loss_lambda_dino * float(loss_dino.detach().item()),
+             "loss_pointmap": self.loss_lambda_pointmap * float(loss_pointmap.detach().item()),
+         }
++        if loss_meci_aux is not None:
++            loss_dict["loss_meci_aux"] = float(loss_meci_aux.detach().item())
++        self._meci_set_ctx(None)
+         return total, loss_dict
+ 
+     # ------------------------------------------------------------------
+@@ -1675,6 +1724,7 @@
+                 pointmap_tokens, pt_t_mod, pt_freqs,
+             )
+         )
++        merged_t_mod = self._meci_condition_future(merged_t_mod, Sv, tpf, Sd, dtpf, Sp, ptpf)  # MECI (d)
+         effective_dtpf = dtpf
+         effective_ptpf = ptpf
+         Sp_for_mask = Sp
+@@ -3169,6 +3219,11 @@
+         present_video: Optional[bool] = None,
+         present_dino: Optional[bool] = None,
+         present_pointmap: Optional[bool] = None,
++        # MECI: optional spoken correction for this call, a dict with
++        # ``audio`` [T,768] (frozen Whisper-small features), optional ``audio_mask``,
++        # ``active``, ``strength``, ``delta`` [6], ``effector`` and ``residual`` [H,A]
++        # (normalized; see meci_metric.build_correction_inputs). None => stock behavior.
++        correction: Optional[dict] = None,
+     ):
+         # Temporarily override self.joint_* when runtime flags are supplied.
+         # Restore on exit so concurrent calls / future calls see the trained
+@@ -3220,8 +3275,20 @@
+         # asked for (or what the trained-default + presence override resolve to).
+         self._maybe_warn_unreachable_combo()
+         self._maybe_log_effective_regime()
++        meci_ctx = None
++        if correction is not None and self.meci is not None:
++            def _b(k, dtype=None):
++                v = correction.get(k)
++                if v is None:
++                    return None
++                return torch.as_tensor(v, dtype=dtype, device=self.device).unsqueeze(0)
++            meci_ctx = self.meci.encode(
++                _b("audio", torch.float32), _b("audio_mask", torch.bool), _b("active", torch.bool),
++                _b("strength", torch.float32), _b("delta", torch.float32), _b("effector", torch.long),
++            )
++        self._meci_set_ctx(meci_ctx)
+         try:
+-            return self._infer_action_dispatch(
++            out = self._infer_action_dispatch(
+                 prompt=prompt,
+                 input_image=input_image,
+                 action_horizon=action_horizon,
+@@ -3246,7 +3313,12 @@
+                 return_stream_latents=return_stream_latents,
+                 force_joint_path=_force_joint_path,
+             )
++            if meci_ctx is not None and bool(meci_ctx.active[0]):
++                # Explicit residual (normalized action space), added after sampling.
++                out["action"] = _meci.apply_explicit_residual(out["action"], correction.get("residual"))
++            return out
+         finally:
++            self._meci_set_ctx(None)
+             self.joint_video, self.joint_dino, self.joint_pointmap = _saved_joint
+             self._infer_present_v = _saved_infer_present_v
+             self._infer_present_d = _saved_infer_present_d
+diff -ruN a/src/flexpi/models/meci_correction.py b/src/flexpi/models/meci_correction.py
+--- a/src/flexpi/models/meci_correction.py	1969-12-31 16:00:00.000000000 -0800
++++ b/src/flexpi/models/meci_correction.py	2026-11-22 11:46:05.093946018 -0800
+@@ -0,0 +1,271 @@
++"""MECI for Flex-pi -- the correction adapter (PyTorch).
++
++Mid-Execution Correction Interface (MECI) for the Flex-pi world-action model
++(github.com/geyan21/flex-pi @ 044b8c2080a14a3d0082f81f612474643446faf3, MIT).
++
++A spoken metric nudge ("left hand more left half an inch") is encoded by a frozen
++Whisper-small encoder outside the graph (768-d frame features) and turned into K
++correction tokens by this adapter. The adapter conditions Flex-pi through four
++gated paths. Every gate is a scalar initialised to 0 and enters as tanh(g) * s,
++where s is the per-sample correction strength (0 when no correction is active):
++
++  (a) action-expert input   ActionDiT.pre_dit, after action_encoder:   x_a += tanh(g_a) s CrossAttn(x_a, C)
++  (b) action-expert adaLN   ActionDiT.pre_dit, time embedding t:       t   += tanh(g_b) s W_b pool(C)
++  (c) pre-output residual   ActionDiT.post_dit, before head:          h   += tanh(g_c) s CrossAttn(h, C)
++  (d) future visual streams FlexPi merged video/DINO/pointmap t_mod, non-anchor tokens only:
++                            t_mod[:, future] += tanh(g_d) s Up(Down(pool(C)))      (WAM-specific)
++
++Path (d) exists because Flex-pi's attention is one-way: no visual token ever attends
++to the action stream (paper Sec. A.5), so conditioning the action expert alone can
++never change the imagined future frames. (d) touches only noisy future tokens, so the
++clean first-frame anchors -- and the KV cache the action-only fast path prefills from
++them -- are unchanged.
++
++With no correction context the hooks are skipped entirely. With a context and zero
++gates, every path adds exactly 0, so outputs are bit-identical to stock Flex-pi.
++"""
++
++from __future__ import annotations
++
++import dataclasses
++from typing import Optional
++
++import torch
++from torch import nn
++import torch.nn.functional as F  # noqa: N812
++
++DELTA_SCALE = (0.05, 0.05, 0.05, 0.5, 0.5, 0.5)  # metres / radians per unit of the displacement head
++NUM_EFFECTORS = 3  # default / left / right (meci_metric.EFFECTORS)
++
++
++@dataclasses.dataclass
++class MECIConfig:
++    width: int = 1024  # Flex-pi action expert hidden_dim (configs/model/flexpi.yaml action_dit_config)
++    video_dim: int = 3072  # Flex-pi video expert hidden_dim (video_dit_config)
++    audio_dim: int = 768  # Whisper-small encoder width
++    num_queries: int = 8  # K correction tokens
++    num_heads: int = 8
++    video_rank: int = 64  # low-rank bottleneck for path (d)
++    condition_video: bool = True  # enable path (d)
++    use_given_delta: bool = True  # teacher-force parsed (delta_p, effector) when available
++    aux_weight: float = 0.1
++
++
++@dataclasses.dataclass
++class CorrectionContext:
++    tokens: torch.Tensor  # (B, K, width)
++    token_mask: torch.Tensor  # (B, K) bool
++    pooled: torch.Tensor  # (B, width)
++    strength: torch.Tensor  # (B,)  0 for inactive samples
++    active: torch.Tensor  # (B,) bool
++    delta_hat: torch.Tensor  # (B, 6) metres / radians
++    effector_logits: torch.Tensor  # (B, 3)
++
++
++class _CrossAttention(nn.Module):
++    def __init__(self, q_dim: int, kv_dim: int, width: int, num_heads: int):
++        super().__init__()
++        assert width % num_heads == 0
++        self.num_heads = num_heads
++        self.q = nn.Linear(q_dim, width)
++        self.k = nn.Linear(kv_dim, width)
++        self.v = nn.Linear(kv_dim, width)
++        self.o = nn.Linear(width, q_dim)
++
++    def forward(self, x, ctx, ctx_mask=None):
++        b, n, _ = x.shape
++        m = ctx.shape[1]
++        h = self.num_heads
++        q = self.q(x).view(b, n, h, -1).transpose(1, 2)
++        k = self.k(ctx).view(b, m, h, -1).transpose(1, 2)
++        v = self.v(ctx).view(b, m, h, -1).transpose(1, 2)
++        logits = (q @ k.transpose(-1, -2)) / (q.shape[-1] ** 0.5)
++        if ctx_mask is not None:
++            # Rows of inactive samples are fully masked; keep them finite (their gate factor s is 0).
++            any_valid = ctx_mask.any(-1)
++            safe = torch.where(any_valid[:, None], ctx_mask, torch.ones_like(ctx_mask))
++            logits = logits.masked_fill(~safe[:, None, None, :], -1e30)
++        probs = torch.softmax(logits.float(), dim=-1).to(v.dtype)
++        out = (probs @ v).transpose(1, 2).reshape(b, n, -1)
++        return self.o(out)
++
++
++class MECICorrection(nn.Module):
++    def __init__(self, config: MECIConfig):
++        super().__init__()
++        self.config = config
++        w = config.width
++        self.audio_norm = nn.LayerNorm(config.audio_dim)
++        self.queries = nn.Parameter(torch.randn(config.num_queries, w) * 0.02)
++        self.projector = _CrossAttention(w, config.audio_dim, w, config.num_heads)
++        self.proj_norm = nn.LayerNorm(w)
++        self.proj_mlp = nn.Sequential(nn.Linear(w, 2 * w), nn.GELU(), nn.Linear(2 * w, w))
++        # DisplacementHead: pooled tokens -> (delta_p / DELTA_SCALE, effector logits)
++        self.disp_in = nn.Linear(w, w)
++        self.disp_out = nn.Linear(w, 6 + NUM_EFFECTORS)
++        nn.init.zeros_(self.disp_out.weight)
++        nn.init.zeros_(self.disp_out.bias)
++        self.delta_embed = nn.Linear(6, w)
++        nn.init.zeros_(self.delta_embed.weight)
++        nn.init.zeros_(self.delta_embed.bias)
++        self.effector_embed = nn.Embedding(NUM_EFFECTORS, w)
++        nn.init.zeros_(self.effector_embed.weight)
++        # (a) input cross-attention, (b) adaLN offset, (c) pre-head cross-attention
++        self.in_xattn = _CrossAttention(w, w, w, config.num_heads)
++        self.gate_in = nn.Parameter(torch.zeros(()))
++        self.ada_proj = nn.Linear(w, w)
++        self.gate_ada = nn.Parameter(torch.zeros(()))
++        self.head_xattn = _CrossAttention(w, w, w, config.num_heads)
++        self.gate_head = nn.Parameter(torch.zeros(()))
++        # (d) future-visual-stream modulation offset (6 x video_dim, low rank)
++        if config.condition_video:
++            self.video_down = nn.Linear(w, config.video_rank)
++            self.video_up = nn.Linear(config.video_rank, 6 * config.video_dim)
++            self.gate_video = nn.Parameter(torch.zeros(()))
++        self.register_buffer("delta_scale", torch.tensor(DELTA_SCALE, dtype=torch.float32), persistent=False)
++
++    # ------------------------------------------------------------------ encode
++    def encode(
++        self,
++        audio: torch.Tensor,  # (B, T, audio_dim) frozen Whisper features
++        audio_mask: Optional[torch.Tensor] = None,  # (B, T) bool
++        active: Optional[torch.Tensor] = None,  # (B,) bool
++        strength: Optional[torch.Tensor] = None,  # (B,) float in [0, 1]
++        delta: Optional[torch.Tensor] = None,  # (B, 6) parsed delta_p (m / rad)
++        effector: Optional[torch.Tensor] = None,  # (B,) long
++    ) -> CorrectionContext:
++        audio = audio.float()
++        b = audio.shape[0]
++        if audio_mask is None:
++            audio_mask = torch.ones(audio.shape[:2], dtype=torch.bool, device=audio.device)
++        audio_mask = audio_mask.bool()
++        active = audio_mask.any(-1) if active is None else active.bool()
++        strength = torch.ones(b, device=audio.device) if strength is None else strength.float()
++        strength = torch.where(active, strength, torch.zeros_like(strength))
++
++        q = self.queries[None].expand(b, -1, -1).float()
++        tok = q + self.projector(q, self.audio_norm(audio), audio_mask)
++        tok = tok + self.proj_mlp(self.proj_norm(tok))
++        pooled = tok.mean(1)
++        head = self.disp_out(F.silu(self.disp_in(pooled)))
++        delta_hat = head[:, :6] * self.delta_scale
++        eff_logits = head[:, 6:]
++        if self.config.use_given_delta and delta is not None:
++            delta_cond = delta.float() / self.delta_scale
++        else:
++            delta_cond = delta_hat.detach() / self.delta_scale
++        if self.config.use_given_delta and effector is not None:
++            eff_emb = self.effector_embed(effector.long())
++        else:
++            eff_emb = torch.softmax(eff_logits, -1) @ self.effector_embed.weight
++        tok = tok + self.delta_embed(delta_cond)[:, None] + eff_emb[:, None]
++        pooled = tok.mean(1)
++        token_mask = active[:, None].expand(b, tok.shape[1])
++        return CorrectionContext(tok, token_mask, pooled, strength, active, delta_hat, eff_logits)
++
++    # ------------------------------------------------------------------ gated paths
++    def _s(self, ctx: CorrectionContext, like: torch.Tensor) -> torch.Tensor:
++        return ctx.strength.to(device=like.device, dtype=like.dtype)
++
++    def condition_action_input(self, ctx: CorrectionContext, tokens: torch.Tensor) -> torch.Tensor:
++        """(a) tokens: (B, H, width) after ActionDiT.action_encoder."""
++        s = self._s(ctx, tokens)[:, None, None]
++        upd = self.in_xattn(tokens.float(), ctx.tokens.float(), ctx.token_mask).to(tokens.dtype)
++        return tokens + torch.tanh(self.gate_in).to(tokens.dtype) * s * upd
++
++    def condition_action_time(self, ctx: CorrectionContext, t: torch.Tensor) -> torch.Tensor:
++        """(b) t: (B, width) action-expert time embedding, before time_projection (adaLN)."""
++        s = self._s(ctx, t)
++        if t.shape[0] == 1 and s.shape[0] > 1:
++            t = t.expand(s.shape[0], -1)
++        upd = self.ada_proj(ctx.pooled.float()).to(t.dtype)
++        return t + torch.tanh(self.gate_ada).to(t.dtype) * s[:, None] * upd
++
++    def pre_head(self, ctx: CorrectionContext, h: torch.Tensor) -> torch.Tensor:
++        """(c) h: (B, H, width) final action-expert hidden state, before ActionDiT.head."""
++        s = self._s(ctx, h)[:, None, None]
++        upd = self.head_xattn(h.float(), ctx.tokens.float(), ctx.token_mask).to(h.dtype)
++        return h + torch.tanh(self.gate_head).to(h.dtype) * s * upd
++
++    def condition_future_t_mod(
++        self, ctx: CorrectionContext, t_mod: torch.Tensor, future_mask: torch.Tensor
++    ) -> torch.Tensor:
++        """(d) t_mod: (B, S, 6, video_dim) merged video/DINO/pointmap modulation;
++        future_mask: (S,) bool, True for noisy future tokens, False for clean anchors."""
++        if not self.config.condition_video:
++            return t_mod
++        b = ctx.strength.shape[0]
++        s = self._s(ctx, t_mod)
++        off = self.video_up(self.video_down(ctx.pooled.float())).to(t_mod.dtype)
++        off = off.view(b, 1, 6, self.config.video_dim)
++        m = future_mask.to(device=t_mod.device, dtype=t_mod.dtype)[None, :, None, None]
++        if t_mod.shape[0] == 1 and b > 1:
++            t_mod = t_mod.expand(b, -1, -1, -1)
++        return t_mod + torch.tanh(self.gate_video).to(t_mod.dtype) * s[:, None, None, None] * off * m
++
++    # ------------------------------------------------------------------ losses
++    def aux_loss(self, ctx: CorrectionContext, delta=None, effector=None) -> torch.Tensor:
++        """Per-sample auxiliary DisplacementHead loss (0 for inactive samples)."""
++        act = ctx.active.float()
++        loss = torch.zeros_like(act)
++        if delta is not None:
++            loss = loss + ((ctx.delta_hat - delta.float()) / self.delta_scale).abs().mean(-1)
++        if effector is not None:
++            loss = loss + F.cross_entropy(ctx.effector_logits, effector.long(), reduction="none")
++        return act * loss
++
++
++# ---------------------------------------------------------------------- helpers used by the patch
++def future_token_mask(Sv: int, tpf: int, Sd: int, dtpf: int, Sp: int, ptpf: int, device=None) -> torch.Tensor:
++    """Merged visual sequence is [video | dino | pointmap] (FlexPi._merge_aux_into_video_stream);
++    the first frame of each stream is a clean anchor (timestep forced to 0)."""
++    m = torch.ones(Sv + Sd + Sp, dtype=torch.bool, device=device)
++    m[:tpf] = False
++    if Sd:
++        m[Sv : Sv + dtpf] = False
++    if Sp:
++        m[Sv + Sd : Sv + Sd + ptpf] = False
++    return m
++
++
++def correction_from_sample(meci: MECICorrection, sample: dict) -> Optional[CorrectionContext]:
++    """Training-batch keys: meci_audio (B,T,768), meci_audio_mask, meci_active, meci_strength,
++    meci_delta (B,6), meci_effector (B,). Returns None when the batch carries no correction."""
++    audio = sample.get("meci_audio")
++    if meci is None or audio is None:
++        return None
++    dev = meci.queries.device
++    g = lambda k: (sample[k].to(dev) if sample.get(k) is not None else None)  # noqa: E731
++    return meci.encode(
++        audio.to(dev), g("meci_audio_mask"), g("meci_active"), g("meci_strength"), g("meci_delta"), g("meci_effector")
++    )
++
++
++def apply_explicit_residual(action: torch.Tensor, residual, active: bool = True) -> torch.Tensor:
++    """Add the normalized-space explicit residual (meci_metric.build_correction_inputs) to a sampled
++    chunk. action: (H, A) or (B, H, A) normalized; residual broadcastable to it."""
++    if residual is None or not active:
++        return action
++    r = torch.as_tensor(residual, dtype=action.dtype, device=action.device)
++    return action + r
++
++
++def awr_weights(advantages: torch.Tensor, beta: float = 1.0, w_max: float = 20.0) -> torch.Tensor:
++    """Advantage-weighted regression weights exp(A / beta), clipped at w_max."""
++    return torch.clamp(torch.exp(advantages / beta), max=w_max)
++
++
++def flow_dpo_loss(err_w, err_l, err_w_ref, err_l_ref, beta: float = 1.0) -> torch.Tensor:
++    """Diffusion-DPO-style preference loss on flow-matching errors (per-sample MSEs at a shared
++    noise / timestep): -log sigmoid(-beta * ((e_w - e_w_ref) - (e_l - e_l_ref)))."""
++    margin = (err_w - err_w_ref) - (err_l - err_l_ref)
++    return -F.logsigmoid(-beta * margin)
++
++
++def meci_state_dict(model: nn.Module) -> dict:
++    """Adapter-only weights (everything under '.meci.')."""
++    return {k: v for k, v in model.state_dict().items() if ".meci." in k or k.startswith("meci.")}
++
++
++def count_parameters(meci: MECICorrection) -> int:
++    return sum(p.numel() for p in meci.parameters())
+diff -ruN a/src/flexpi/models/meci_metric.py b/src/flexpi/models/meci_metric.py
+--- a/src/flexpi/models/meci_metric.py	1969-12-31 16:00:00.000000000 -0800
++++ b/src/flexpi/models/meci_metric.py	2026-11-22 11:46:05.093946018 -0800
+@@ -0,0 +1,447 @@
++"""MECI for Flex-pi -- framework-agnostic (NumPy) metric-correction utilities.
++
++Spoken mid-execution corrections are *metric end-effector nudges* that may name the effector:
++    "left hand more left half an inch", "right gripper up 1 cm", "move forward 1 inch",
++    "rotate gripper 10 degrees".
++They are parsed into (effector e, direction, magnitude) -> a 6-D Cartesian displacement
++delta_p = [dx, dy, dz, droll, dpitch, dyaw] in metres / radians in a declared frame, and then
++mapped into Flex-pi's *normalized* action space for the platform's action layout.
++
++The parser and grammar are shared with the pi0.5 version of MECI; the platform layouts below were
++checked in geyan21/flex-pi @ 044b8c2080a14a3d0082f81f612474643446faf3:
++  * Canonical 32-D layout (paper App. A.1; configs/data/yam.yaml norm_skip_dims_mask):
++      0-2 L EE pos, 3-8 L rot6d, 9-11 R EE pos, 12-17 R rot6d, 18/19 L/R gripper, 20-31 L/R joints (6+6).
++  * LIBERO (configs/data/libero.yaml): action_output_dim 32, ScatterToChannels with
++      used_action_channel_ids [0,1,2,3,4,5,18] -> per-step OSC_POSE deltas [dpos(3), axis-angle(3)] in
++      slots 0-5 and the gripper in slot 18; norm_default_mode z-score.
++  * RoboTwin 2.0 (configs/data/robotwin.yaml): action_output_dim 14, ConcatLeftAlign, z-score; actions are
++      absolute joint targets executed with task_env.take_action(action, action_type="qpos")
++      (experiments/robotwin/flexpi_policy/deploy_policy.py l.763). Vector order is
++      [left arm joints, left gripper, right arm joints, right gripper]
++      (third_party/RoboTwin/envs/_base_task.py l.487-494); 6 joints per arm for 14-D.
++  * YAM (configs/data/yam.yaml, transforms/yam_relative_action.py): 32-D, anchor-relative actions
++      ("first" anchor = state at the chunk's first timestep). EE targets are body-frame relative poses
++      R_base^T (p - p_base); joints are scalar deltas; grippers absolute. norm_default_mode q01/q99 with the
++      rot6d slots skipped.
++  * Normalization (src/flexpi/datasets/lerobot/utils/normalizer.py, SingleFieldLinearNormalizer):
++      forward x_n = x * scale + offset (then clamp); backward x = (x_n - offset) / scale (no clamp).
++      z-score: scale = 1 / (std + 1e-8); q01/q99: scale = 2 / (q99 - q01) (range < 1e-4 -> scale 1);
++      skipped dims: scale = 1. An additive raw residual therefore maps exactly to dn = dx * scale.
++"""
++
++from __future__ import annotations
++
++from collections.abc import Callable, Sequence
++import dataclasses
++import math
++import re
++
++import numpy as np
++
++# ----------------------------------------------------------------------------------------------
++# 1. Units, directions, effectors
++# ----------------------------------------------------------------------------------------------
++INCH_TO_M = 0.0254
++CM_TO_M = 0.01
++MM_TO_M = 0.001
++DEG_TO_RAD = math.pi / 180.0
++
++# Declared spoken-language frame (robot base). Axis signs are PLACEHOLDERS to be calibrated per
++# platform by commanding a known residual and observing the EE motion (see DESIGN.md, open decisions).
++CORRECTION_FRAME = "robot_base"
++DIRECTION_AXES: dict[str, tuple[int, int]] = {
++    "forward": (0, +1),
++    "back": (0, -1),
++    "left": (1, +1),
++    "right": (1, -1),
++    "up": (2, +1),
++    "down": (2, -1),
++}
++ROTATION_AXES: dict[str, tuple[int, int]] = {"roll": (3, +1), "pitch": (4, +1), "yaw": (5, +1)}
++ROTATION_ALIASES = {"gripper": "yaw", "wrist": "yaw", "end effector": "yaw", "end-effector": "yaw"}
++
++EFFECTORS = ("default", "left", "right")
++EFFECTOR_TO_ID = {e: i for i, e in enumerate(EFFECTORS)}
++EFFECTOR_ALIASES: tuple[tuple[str, str], ...] = (
++    ("left hand", "left"),
++    ("left arm", "left"),
++    ("left gripper", "left"),
++    ("right hand", "right"),
++    ("right arm", "right"),
++    ("right gripper", "right"),
++)
++
++_WORD_MAGNITUDES = {
++    "a quarter": 0.25,
++    "quarter": 0.25,
++    "a half": 0.5,
++    "half": 0.5,
++    "one": 1.0,
++    "two": 2.0,
++    "three": 3.0,
++    "four": 4.0,
++    "five": 5.0,
++    "ten": 10.0,
++}
++_UNIT_ALIASES = {
++    "in": "inch",
++    "inch": "inch",
++    "inches": "inch",
++    "cm": "cm",
++    "centimeter": "cm",
++    "centimeters": "cm",
++    "centimetre": "cm",
++    "centimetres": "cm",
++    "mm": "mm",
++    "millimeter": "mm",
++    "millimeters": "mm",
++    "millimetre": "mm",
++    "millimetres": "mm",
++    "m": "m",
++    "meter": "m",
++    "meters": "m",
++    "metre": "m",
++    "metres": "m",
++    "deg": "deg",
++    "degs": "deg",
++    "degree": "deg",
++    "degrees": "deg",
++    "rad": "rad",
++    "radian": "rad",
++    "radians": "rad",
++}
++_UNIT_RE = (
++    r"(?P<unit>inch(?:es)?|in\b|centimet(?:er|re)s?|cm\b|millimet(?:er|re)s?|mm\b|met(?:er|re)s?|m\b|"
++    r"degrees?|degs?\b|radians?|rad\b)"
++)
++
++
++@dataclasses.dataclass
++class MetricCommand:
++    """A parsed metric nudge."""
++
++    kind: str  # "translate" | "rotate"
++    direction: str  # forward/back/left/right/up/down or roll/pitch/yaw
++    magnitude: float  # in `unit`
++    unit: str  # canonical unit
++    axis: int  # index into the 6-D Cartesian delta
++    sign: int
++    effector: str = "default"  # "default" | "left" | "right"
++    phrase: str = ""
++
++    @property
++    def effector_id(self) -> int:
++        return EFFECTOR_TO_ID[self.effector]
++
++    def delta_p(self) -> np.ndarray:
++        """6-D Cartesian displacement [dx, dy, dz, droll, dpitch, dyaw] in metres / radians."""
++        d = np.zeros(6, dtype=np.float32)
++        d[self.axis] = self.sign * magnitude_to_si(self.magnitude, self.unit, self.kind)
++        return d
++
++
++def magnitude_to_si(magnitude: float, unit: str, kind: str) -> float:
++    u = _UNIT_ALIASES.get(unit.lower().strip(), unit.lower().strip())
++    if kind == "rotate":
++        if u == "deg":
++            return magnitude * DEG_TO_RAD
++        if u == "rad":
++            return magnitude
++        raise ValueError(f"unsupported rotation unit {unit!r}")
++    table = {"inch": INCH_TO_M, "cm": CM_TO_M, "mm": MM_TO_M, "m": 1.0}
++    if u not in table:
++        raise ValueError(f"unsupported translation unit {unit!r}")
++    return magnitude * table[u]
++
++
++def parse_metric_command(phrase: str) -> MetricCommand | None:
++    """Rule-based parser (the ASR -> parser baseline) for templated metric nudges.
++
++    The effector phrase ("left hand", "right gripper", ...) is matched and removed *first*, so in
++    "left hand more left half an inch" the first "left" is the effector and the second the direction.
++    Returns None if the phrase is not a metric nudge.
++    """
++    text = " ".join(phrase.lower().replace(",", " ").strip().split())
++    if not text:
++        return None
++    effector = "default"
++    for alias, canon in EFFECTOR_ALIASES:
++        if re.search(rf"\b{re.escape(alias)}\b", text):
++            effector = canon
++            text = " ".join(re.sub(rf"\b{re.escape(alias)}\b", " ", text, count=1).split())
++            break
++
++    # magnitude + unit
++    mag = unit = None
++    for word, val in sorted(_WORD_MAGNITUDES.items(), key=lambda kv: -len(kv[0])):
++        m = re.search(rf"\b{re.escape(word)}\b\s+(?:an?\s+)?{_UNIT_RE}", text)
++        if m:
++            mag, unit = val, m.group("unit")
++            break
++    if mag is None:
++        m = re.search(rf"(?P<mag>\d+(?:\.\d+)?)\s*{_UNIT_RE}", text)
++        if m:
++            mag, unit = float(m.group("mag")), m.group("unit")
++    if mag is None:
++        return None
++    unit = _UNIT_ALIASES.get(unit.strip(), unit.strip())
++
++    if unit in ("deg", "rad") or re.search(r"\brotate\b|\bturn\b|\btwist\b", text):
++        kind = "rotate"
++        direction = None
++        for alias, canon in ROTATION_ALIASES.items():
++            if re.search(rf"\b{re.escape(alias)}\b", text):
++                direction = canon
++                break
++        for name in ROTATION_AXES:
++            if re.search(rf"\b{name}\b", text):
++                direction = name
++                break
++        direction = direction or "yaw"
++        axis, sign = ROTATION_AXES[direction]
++        if re.search(r"\b(counter[- ]?clockwise|anticlockwise)\b", text):
++            sign = +1
++        elif re.search(r"\bclockwise\b", text):
++            sign = -1
++    else:
++        kind = "translate"
++        direction = None
++        for name in ("forward", "backward", "back", "left", "right", "up", "down"):
++            if re.search(rf"\b{name}\b", text):
++                direction = "back" if name == "backward" else name
++                break
++        if direction is None:
++            return None
++        axis, sign = DIRECTION_AXES[direction]
++    return MetricCommand(kind, direction, float(mag), unit, axis, sign, effector=effector, phrase=phrase)
++
++
++# ----------------------------------------------------------------------------------------------
++# 2. Platform action layouts (verified in flex-pi @ 044b8c2, see module docstring)
++# ----------------------------------------------------------------------------------------------
++@dataclasses.dataclass(frozen=True)
++class ArmSlice:
++    pos_start: int | None = None  # first EE-position slot (3 slots), Cartesian layouts
++    rot_start: int | None = None  # first rotation slot (3 for axis-angle deltas), None = no rotation residual
++    joint_start: int | None = None  # first joint slot
++    num_joints: int = 0
++    gripper_index: int | None = None
++
++
++@dataclasses.dataclass(frozen=True)
++class PlatformLayout:
++    name: str
++    action_dim: int  # model action width (32 canonical, 14 for RoboTwin)
++    arms: dict  # effector name -> ArmSlice ("default" for single-arm platforms)
++    # "cartesian": residual in EE slots; "joint": residual via DLS IK in joint slots;
++    # "cartesian+joint": EE slots and (optionally, with a Jacobian) the joint-delta slots (YAM).
++    space: str
++    # "per_step": each action is an increment (LIBERO OSC deltas): sum over the window == delta.
++    # "chunk_relative": targets relative to the chunk-anchor state (YAM): ramp to delta.
++    # "absolute": absolute targets (RoboTwin qpos): ramp to delta measured from the utterance.
++    semantics: str
++    cartesian_scale: tuple | None = None  # physical units per unit raw action (LIBERO OSC_POSE output_max)
++    body_frame: bool = False  # YAM: EE targets are expressed in the anchor body frame (R_base^T dp)
++
++
++LIBERO = PlatformLayout(
++    name="libero",
++    action_dim=32,
++    arms={"default": ArmSlice(pos_start=0, rot_start=3, gripper_index=18)},
++    space="cartesian",
++    semantics="per_step",
++    cartesian_scale=(0.05, 0.05, 0.05, 0.5, 0.5, 0.5),  # robosuite OSC_POSE output_max (m, rad)
++)
++ROBOTWIN = PlatformLayout(
++    name="robotwin",
++    action_dim=14,
++    arms={
++        "left": ArmSlice(joint_start=0, num_joints=6, gripper_index=6),
++        "right": ArmSlice(joint_start=7, num_joints=6, gripper_index=13),
++    },
++    space="joint",
++    semantics="absolute",
++)
++YAM = PlatformLayout(
++    name="yam",
++    action_dim=32,
++    arms={
++        "left": ArmSlice(pos_start=0, joint_start=20, num_joints=6, gripper_index=18),
++        "right": ArmSlice(pos_start=9, joint_start=26, num_joints=6, gripper_index=19),
++    },
++    space="cartesian+joint",
++    semantics="chunk_relative",
++    body_frame=True,
++)
++PLATFORMS = {p.name: p for p in (LIBERO, ROBOTWIN, YAM)}
++
++
++def resolve_arm(layout: PlatformLayout, effector: str):
++    """Named-effector routing. Single-arm platforms ignore the name; bimanual + unnamed -> None."""
++    if effector in layout.arms:
++        return layout.arms[effector]
++    if "default" in layout.arms and len(layout.arms) == 1:
++        return layout.arms["default"]
++    return None
++
++
++# ----------------------------------------------------------------------------------------------
++# 3. Cartesian -> joint (first order), for joint-space slots (RoboTwin, optional on YAM)
++# ----------------------------------------------------------------------------------------------
++def dls_joint_delta(jacobian: np.ndarray, delta_p: np.ndarray, damping: float = 1e-3) -> np.ndarray:
++    """Damped-least-squares IK step dq = J^T (J J^T + lambda^2 I)^-1 dp. `jacobian` is the (6, n) geometric
++    Jacobian of the named arm at the current joint state, in the frame of delta_p. Flex-pi ships no arm
++    kinematics; the caller supplies J. First order: valid for small nudges only."""
++    jac = np.asarray(jacobian, dtype=np.float64)
++    dp = np.asarray(delta_p, dtype=np.float64).reshape(-1)
++    jjt = jac @ jac.T
++    return (jac.T @ np.linalg.solve(jjt + (damping**2) * np.eye(jjt.shape[0]), dp)).astype(np.float32)
++
++
++# ----------------------------------------------------------------------------------------------
++# 4. Physical residual over the hold window, routed to the named effector
++# ----------------------------------------------------------------------------------------------
++def hold_fade_strengths(hold_steps: int = 16, fade_steps: int = 8) -> np.ndarray:
++    """Per-control-step strengths of a correction: 1 during the hold, linear fade to 0."""
++    s = np.ones(hold_steps, dtype=np.float32)
++    if fade_steps > 0:
++        f = min(fade_steps, hold_steps)
++        s[-f:] = np.arange(f, 0, -1, dtype=np.float32) / float(f)
++    return s
++
++
++def raw_action_delta(
++    layout: PlatformLayout,
++    delta_p: np.ndarray,
++    effector: str,
++    jacobian_fn: Callable | None = None,
++    anchor_rotation: dict | None = None,
++) -> tuple[np.ndarray, bool]:
++    """Total raw-action displacement (length layout.action_dim) for the named effector.
++
++    Returns (delta_a, routed). routed=False when the effector cannot be resolved (bimanual + unnamed):
++    delta_a is all zeros and the learned path decides. Gripper slots are never touched.
++    `anchor_rotation[effector]` is the 3x3 base->EE rotation R_base of the chunk anchor (YAM body frame).
++    Rotation residuals are applied only on axis-angle delta layouts (LIBERO); rot6d slots are left to the
++    learned path.
++    """
++    out = np.zeros(layout.action_dim, dtype=np.float32)
++    arm = resolve_arm(layout, effector)
++    if arm is None:
++        return out, False
++    dp = np.asarray(delta_p, dtype=np.float64).reshape(6)
++    key = effector if effector in layout.arms else "default"
++    if "cartesian" in layout.space and arm.pos_start is not None:
++        pos = dp[:3].copy()
++        if layout.body_frame:
++            if anchor_rotation is None or key not in anchor_rotation:
++                raise ValueError(f"{layout.name}: body-frame targets need anchor_rotation[{key!r}] (R_base)")
++            pos = np.asarray(anchor_rotation[key], dtype=np.float64).T @ pos
++        if layout.cartesian_scale is not None:
++            scale = np.asarray(layout.cartesian_scale, dtype=np.float64)
++            out[arm.pos_start : arm.pos_start + 3] = pos / scale[:3]
++            if arm.rot_start is not None:
++                out[arm.rot_start : arm.rot_start + 3] = dp[3:] / scale[3:]
++        else:
++            out[arm.pos_start : arm.pos_start + 3] = pos
++    if arm.joint_start is not None and arm.num_joints and (layout.space == "joint" or jacobian_fn is not None):
++        if jacobian_fn is None:
++            raise ValueError(f"{layout.name}: joint-space platform needs jacobian_fn(effector) -> (6, n_joints)")
++        dq = dls_joint_delta(jacobian_fn(key), dp)
++        if dq.shape[0] != arm.num_joints:
++            raise ValueError(f"Jacobian has {dq.shape[0]} joints, layout expects {arm.num_joints}")
++        out[arm.joint_start : arm.joint_start + arm.num_joints] = dq
++    return out, True
++
++
++def chunk_residual(
++    layout: PlatformLayout,
++    delta_a: np.ndarray,
++    window_strengths: np.ndarray,
++    chunk_start: int,
++    action_horizon: int,
++) -> np.ndarray:
++    """Raw-space residual (action_horizon, action_dim) for a chunk starting `chunk_start` control steps
++    after the utterance.
++      per_step:       SUM over the window of r_t == delta_a
++      chunk_relative: ramp of the share still to be done in this chunk (the anchor already contains the
++                      motion executed in earlier chunks)
++      absolute:       ramp of the cumulative share since the utterance (absolute targets carry no anchor)
++    """
++    w = np.asarray(window_strengths, dtype=np.float64)
++    total = max(w.sum(), 1e-12)
++    n_win = len(w)
++    steps = np.arange(chunk_start, chunk_start + action_horizon)
++    share = np.where(steps < n_win, w[np.clip(steps, 0, n_win - 1)], 0.0) / total
++    if layout.semantics == "per_step":
++        coeff = share
++    elif layout.semantics == "chunk_relative":
++        coeff = np.cumsum(share)
++    elif layout.semantics == "absolute":
++        before = w[: min(chunk_start, n_win)].sum() / total
++        coeff = before + np.cumsum(share)
++        coeff = np.where(steps < n_win, coeff, 0.0)  # released after the hold window
++    else:
++        raise ValueError(layout.semantics)
++    return (coeff[:, None] * np.asarray(delta_a, dtype=np.float64)[None, :]).astype(np.float32)
++
++
++# ----------------------------------------------------------------------------------------------
++# 5. Map into Flex-pi's normalized action space (SingleFieldLinearNormalizer)
++# ----------------------------------------------------------------------------------------------
++def normalizer_scale(
++    mode: str, *, mean=None, std=None, q01=None, q99=None, vmin=None, vmax=None, skip_mask=None
++) -> np.ndarray:
++    """Per-dimension `scale` of flex-pi's SingleFieldLinearNormalizer (normalizer.py l.111-169)."""
++    if mode == "z-score":
++        scale = 1.0 / (np.asarray(std, np.float64) + 1e-8)
++    else:
++        lo, hi = (q01, q99) if mode == "q01/q99" else (vmin, vmax)
++        rng = np.asarray(hi, np.float64) - np.asarray(lo, np.float64)
++        ignore = rng < 1e-4
++        rng = np.where(ignore, 2.0, rng)
++        scale = 2.0 / rng
++    if skip_mask is not None:
++        scale = np.where(np.asarray(skip_mask, bool), 1.0, scale)
++    return scale
++
++
++def normalize_residual(residual: np.ndarray, scale: np.ndarray) -> np.ndarray:
++    """Additive raw residual -> additive residual in normalized space (exact: the map is affine)."""
++    return (np.asarray(residual, np.float64) * np.asarray(scale, np.float64)).astype(np.float32)
++
++
++def build_correction_inputs(
++    phrase_or_cmd,
++    layout: PlatformLayout,
++    *,
++    action_horizon: int,
++    norm_scale: np.ndarray,
++    chunk_start: int = 0,
++    window_strengths: np.ndarray | None = None,
++    jacobian_fn: Callable | None = None,
++    anchor_rotation: dict | None = None,
++) -> dict | None:
++    """Policy-side helper: phrase -> the `correction` dict consumed by the patched FlexPi.infer_action.
++    Whisper features (`audio`, `audio_mask`) are added separately by the frozen encoder."""
++    cmd = parse_metric_command(phrase_or_cmd) if isinstance(phrase_or_cmd, str) else phrase_or_cmd
++    if cmd is None:
++        return None
++    w = hold_fade_strengths() if window_strengths is None else np.asarray(window_strengths, np.float32)
++    dp = cmd.delta_p()
++    delta_a, routed = raw_action_delta(layout, dp, cmd.effector, jacobian_fn, anchor_rotation)
++    r = chunk_residual(layout, delta_a, w, chunk_start, action_horizon)
++    rn = normalize_residual(r, norm_scale)
++    step = min(chunk_start, len(w) - 1)
++    strength = float(w[step]) if chunk_start < len(w) else 0.0
++    return {
++        "active": np.bool_(strength > 0.0),
++        "strength": np.float32(strength),
++        "delta": dp.astype(np.float32),
++        "effector": np.int64(cmd.effector_id),
++        "residual": rn if routed else np.zeros_like(rn),
++        "routed": routed,
++    }
++
++
++__all__ = [n for n in dir() if not n.startswith("_")]
